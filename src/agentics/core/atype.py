@@ -1,14 +1,30 @@
-from pydantic import BaseModel, create_model, Field
-from typing import Any, Optional, get_origin,get_args, Dict, Union, List, Set, Tuple, Type
-from agentics.core.utils import sanitize_field_name
-import pandas as pd
 import csv
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Type,
+    Union,
+    get_args,
+    get_origin,
+)
+
+import pandas as pd
+from pydantic import BaseModel, Field, create_model
+
+from agentics.core.utils import sanitize_field_name
+
 
 class AGString(BaseModel):
-    string:Optional[str] = None
+    string: Optional[str] = None
+
 
 #####################################
 ####### Utils #######################
+
 
 def pretty_print_atype(atype, indent: int = 2):
     """
@@ -41,7 +57,17 @@ def copy_attribute_values(
     setattr(state, target_attribute, source_value)
     return state
 
+def get_pydantic_fields(atype: Type[BaseModel]) -> pd.DataFrame:
+    rows = []
+    for field_name, field in atype.model_fields.items():
+        rows.append({
+            "Field": field_name,
+            "Type": str(field.annotation),         # Type annotation
+            "Description": field.description       # Description from Field(...)
+        })
 
+    # Create DataFrame
+    return pd.DataFrame(rows)
 
 def get_active_fields(state: BaseModel, allowed_fields: Set[str] = None) -> Set[str]:
     """
@@ -172,6 +198,7 @@ def create_pydantic_model(
         model_name = name
 
     field_definitions = {}
+    print(fields)
     for field_name, type_name, description, required in fields:
         # ptype = type_mapping.get(model_name, str)  # default to str if unknown
 
@@ -181,7 +208,6 @@ def create_pydantic_model(
         else:
             field_definitions[field_name] = (Optional[ptype], None)
     return create_model(model_name, **field_definitions)
-
 
 
 def make_all_fields_optional(
@@ -214,6 +240,7 @@ def make_all_fields_optional(
 
     new_name = rename_type or f"{model_cls.__name__}Optional"
     return create_model(new_name, **fields)
+
 
 def pretty_print_atype(atype, indent: int = 2):
     """
