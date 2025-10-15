@@ -1,0 +1,9 @@
+python-dotenv
+google-generativeai
+crewai
+crewai-tools
+pyyaml
+py-solc-x
+web3
+eth-tester
+py-evm
