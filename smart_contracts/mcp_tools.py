@@ -26,8 +26,12 @@ class SmartContract(BaseModel):
     compiler_errors: Optional[str] = None
     deploy_errors: Optional[str] = None
 
+# check if pydantic input is needed
+
 @mcp.tool()
 def generate_smart_contract(description: str, blockchain: str = "Ethereum") -> SmartContract:
+    'This tool generates smart contracts for solidity based codes' # generate description
+    # describe input too
     prompt = f"""
     You are an expert blockchain developer.
     Generate a complete Solidity smart contract for the following description:
@@ -69,7 +73,7 @@ def check_deployability(contract: SmartContract, openzeppelin_path: str = None) 
         # Prepare import remappings if OpenZeppelin path is provided
         import_remappings = []
         if openzeppelin_path:
-            openzeppelin_path = os.path.abspath(openzeppelin_path)
+            openzeppelin_path = os.path.abspath(openzeppelin_path)  
             import_remappings.append(f"@openzeppelin/={openzeppelin_path}")
 
         # Compile Solidity source
