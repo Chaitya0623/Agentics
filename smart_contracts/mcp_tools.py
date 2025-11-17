@@ -1,8 +1,17 @@
+import os
+import sys
+from pathlib import Path
+from typing import List, Optional
+
+from pydantic import BaseModel, Field
+
 from mcp.server.fastmcp import FastMCP
 
-import os
-from pydantic import BaseModel, Field
-from typing import List, Optional
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_PATH = PROJECT_ROOT / "src"
+if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
+
 import google.generativeai as genai
 import solcx
 from web3 import Web3

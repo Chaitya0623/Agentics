@@ -1,4 +1,6 @@
 # streamlit_app.py
+import re
+
 import streamlit as st
 
 @st.cache_resource
@@ -10,6 +12,32 @@ st.set_page_config(page_title="Smart Contract Generator", layout="wide")
 
 st.title("🧠 Solidity Smart Contract Generator")
 st.write("Describe your contract in natural language and generate Solidity code instantly.")
+
+if "crew_log" not in st.session_state:
+    st.session_state.crew_log = ""
+
+_ansi_escape = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+
+def _render_log_boxes(log_text: str):
+    clean_text = _ansi_escape.sub("", log_text or "")
+    if clean_text.strip():
+        lines = clean_text.splitlines()
+        preview = "\n".join(lines[-10:])
+        log_preview_placeholder.code(preview, language="text")
+        full_log_placeholder.code(clean_text, language="text")
+    else:
+        log_preview_placeholder.info("Crew logs will appear here once a run starts.")
+        full_log_placeholder.empty()
+
+def _handle_log_stream(log_text: str):
+    st.session_state.crew_log = log_text
+    _render_log_boxes(log_text)
+
+st.subheader("CrewAI Logs")
+st.caption("Last 10 lines update live below. Scroll in the code block to inspect the full log output.")
+log_preview_placeholder = st.empty()
+full_log_placeholder = st.empty()
+_render_log_boxes(st.session_state.crew_log)
 
 # user_input = st.text_area(
 #     "Enter contract description:",
@@ -24,7 +52,9 @@ if st.button("🚀 Generate Contract"):
     else:
         with st.spinner("Generating and validating your contract..."):
             pipeline = get_pipeline()
-            result = pipeline(user_input)
+            result, crew_log = pipeline(user_input, on_log=_handle_log_stream)
+        st.session_state.crew_log = crew_log
+        _render_log_boxes(crew_log)
         st.success("✅ Contract generated successfully!")
 
         # st.write(result)

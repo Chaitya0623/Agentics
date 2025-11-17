@@ -1,3 +1,5 @@
+import re
+
 import streamlit as st
 
 # --- 1. Cached pipeline import ---
@@ -13,8 +15,35 @@ st.title("🧠 Solidity Smart Contract Chat")
 # --- 3. Initialize session state for chat history ---
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+if "crew_log" not in st.session_state:
+    st.session_state.crew_log = ""
 
-# --- 4. Sidebar instructions ---
+_ansi_escape = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+
+# --- 4. Live Crew log display ---
+st.subheader("CrewAI Logs")
+st.caption("Live preview shows the last 10 lines; scroll the full block for complete output.")
+log_preview_placeholder = st.empty()
+full_log_placeholder = st.empty()
+
+def _render_log_boxes(log_text: str):
+    clean_text = _ansi_escape.sub("", log_text or "")
+    if clean_text.strip():
+        lines = clean_text.splitlines()
+        preview = "\n".join(lines[-10:])
+        log_preview_placeholder.code(preview, language="text")
+        full_log_placeholder.code(clean_text, language="text")
+    else:
+        log_preview_placeholder.info("Logs will stream here once the crew starts running.")
+        full_log_placeholder.empty()
+
+def _handle_log_stream(log_text: str):
+    st.session_state.crew_log = log_text
+    _render_log_boxes(log_text)
+
+_render_log_boxes(st.session_state.crew_log)
+
+# --- 5. Sidebar instructions ---
 st.sidebar.title("Instructions")
 st.sidebar.write("""
 - Chat with the AI to generate and refine Solidity contracts.
@@ -22,7 +51,7 @@ st.sidebar.write("""
 - Continue the conversation to iteratively improve your contract.
 """)
 
-# --- 5. Display conversation in chatbot style ---
+# --- 6. Display conversation in chatbot style ---
 for i, message in enumerate(st.session_state.chat_history):
     if message["user"]:
         st.chat_message("user").write(message["user"])
@@ -53,15 +82,16 @@ for i, message in enumerate(st.session_state.chat_history):
                 else:
                     st.write("No clauses found.")
 
-# --- 6. Chat input for new messages ---
+# --- 7. Chat input for new messages ---
 if user_input := st.chat_input("Describe or refine your contract..."):
     st.chat_message("user").write(user_input)
 
     pipeline = get_pipeline()
     with st.spinner("Generating response..."):
-        # result, crew_log = pipeline(user_input)
-        result = pipeline(user_input)
+        result, crew_log = pipeline(user_input, on_log=_handle_log_stream)
 
+    st.session_state.crew_log = crew_log
+    _render_log_boxes(crew_log)
     # Extract contract data
     contract = None
     if hasattr(result, "tasks_output") and result.tasks_output: # how can we stream it
@@ -108,5 +138,3 @@ if user_input := st.chat_input("Describe or refine your contract..."):
                     st.write("No clauses found.")
         else:
             st.error("No contract generated.")
-        
-        # st.write(crew_log)

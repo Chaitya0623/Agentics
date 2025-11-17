@@ -1,5 +1,16 @@
+import io
 import os
+import sys
+from contextlib import redirect_stdout
+from pathlib import Path
+from typing import Callable, Optional
+
 from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_PATH = PROJECT_ROOT / "src"
+if SRC_PATH.exists():
+    sys.path.insert(0, str(SRC_PATH))
 
 from crewai_tools import MCPServerAdapter
 from mcp import StdioServerParameters
@@ -7,24 +18,27 @@ from crewai import Agent, Task, Crew
 from agentics import AG
 
 from mcp_tools import SmartContract
-# import io
-# import sys
-
-# buffer = io.StringIO()
-# sys_stdout = sys.stdout
-# sys.stdout = buffer
 
 load_dotenv()
 
-def run_contract_pipeline(user_input: str) -> SmartContract:
+
+def run_contract_pipeline(
+    user_input: str, on_log: Optional[Callable[[str], None]] = None
+) -> tuple[object, str]:
     fetch_params = StdioServerParameters(
         command="uvx",
         args=["mcp-server-fetch"],
         env={"UV_PYTHON": "3.12", **os.environ},
     )
+    mcp_server_path = os.getenv("MCP_SERVER_PATH")
+    if not mcp_server_path:
+        raise RuntimeError(
+            "MCP_SERVER_PATH is not set. Provide the path to your MCP server script in the environment."
+        )
+
     mcp_params = StdioServerParameters(
         command="python3",
-        args=[os.getenv("MCP_SERVER_PATH")],
+        args=[mcp_server_path],
         env={"UV_PYTHON": "3.12", **os.environ},
     ) # check if you should mention these parameters outside the pipeline
 
@@ -69,17 +83,27 @@ def run_contract_pipeline(user_input: str) -> SmartContract:
             inputs={"contract": "{memory.generated_contract}"}
         )
 
-        # Crew Orchestration
         crew = Crew(
             agents=[contract_agent],
-            tasks=[task_generate, task_validate], # make other validation tests not run sequentially
+            tasks=[task_generate, task_validate],
             verbose=True,
         )
 
-        # user_input = input("Enter a natural language description of the contract: ").strip()
-        result = crew.kickoff(inputs={"description": user_input})
+        log_buffer = io.StringIO()
+        original_stdout = sys.stdout
 
-        # sys.stdout = sys_stdout
-        # crew_log = buffer.getvalue()
-        # return result, crew_log
-        return result
+        class _StdoutLogger:
+            def write(self, data):
+                original_stdout.write(data)
+                log_buffer.write(data)
+                if on_log:
+                    on_log(log_buffer.getvalue())
+                return len(data)
+
+            def flush(self):
+                original_stdout.flush()
+
+        with redirect_stdout(_StdoutLogger()):
+            result = crew.kickoff(inputs={"description": user_input})
+
+        return result, log_buffer.getvalue()
