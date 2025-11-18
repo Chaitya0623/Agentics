@@ -45,6 +45,13 @@ _render_log_boxes(st.session_state.crew_log)
 
 # --- 5. Sidebar instructions ---
 st.sidebar.title("Instructions")
+MODEL_OPTIONS = {
+    "Gemini 2.0 Flash": "gemini",
+    "FSM Fine-Tuned TinyLlama": "fsm_pretrained",
+}
+model_label = st.sidebar.selectbox("Generation model", list(MODEL_OPTIONS.keys()))
+selected_model = MODEL_OPTIONS[model_label]
+
 st.sidebar.write("""
 - Chat with the AI to generate and refine Solidity contracts.
 - Each message will generate Solidity code, validation results, and clauses.
@@ -88,7 +95,11 @@ if user_input := st.chat_input("Describe or refine your contract..."):
 
     pipeline = get_pipeline()
     with st.spinner("Generating response..."):
-        result, crew_log = pipeline(user_input, on_log=_handle_log_stream)
+        result, crew_log = pipeline(
+            user_input,
+            model_choice=selected_model,
+            on_log=_handle_log_stream,
+        )
 
     st.session_state.crew_log = crew_log
     _render_log_boxes(crew_log)

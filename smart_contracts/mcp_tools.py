@@ -1,6 +1,7 @@
 import os
 import sys
 from pathlib import Path
+from threading import Lock
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
@@ -23,6 +24,175 @@ mcp = FastMCP("Search")
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
+DEFAULT_FSM_CHECKPOINT = "checkpoint-1200"
+FSM_ADAPTER_ROOT = (
+    PROJECT_ROOT
+    / "smart_contracts"
+    / "pretraining_code_checkpoints"
+    / "FSM-Fine-Tuning-Dataset"
+    / "artifacts"
+    / "fsm_pretraining"
+)
+FSM_ADAPTER_PATH = Path(
+    os.getenv(
+        "FSM_PRETRAINED_PATH",
+        FSM_ADAPTER_ROOT / os.getenv("FSM_PRETRAINED_CHECKPOINT", DEFAULT_FSM_CHECKPOINT),
+    )
+).expanduser()
+FSM_BASE_MODEL_ID = os.getenv(
+    "FSM_BASE_MODEL", "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+)
+
+_fsm_model = None
+_fsm_tokenizer = None
+_fsm_device = None
+_fsm_lock = Lock()
+
+SYSTEM_PROMPT = (
+    "You are an expert blockchain developer who writes production-grade Solidity "
+    "smart contracts with detailed documentation and validation checks."
+)
+
+
+def _build_user_prompt(description: str, blockchain: str) -> str:
+    return f"""
+Generate a complete Solidity smart contract for the following description:
+"{description}"
+
+Requirements:
+- Contract must target {blockchain}.
+- Include events, modifiers, and comments explaining the logic.
+- Validate inputs and follow best practices (access control, SafeMath when needed).
+- After the code, list key clauses as `Clauses:` with numbered bullet points
+  formatted as `Title: Description`.
+
+Respond using this structure:
+```solidity
+// Solidity contract
+```
+
+Clauses:
+1. Title: Description
+2. Title: Description
+"""
+
+
+def _default_clauses() -> List["ContractClause"]:
+    return [
+        ContractClause(
+            title="Core Requirements",
+            description="Generated contract implements the functionality described by the user.",
+        )
+    ]
+
+
+def _parse_contract_response(raw_text: str) -> tuple[str, List["ContractClause"]]:
+    text = raw_text or ""
+    lower_text = text.lower()
+
+    contract_code = text.strip()
+    start_token = "```solidity"
+    start_idx = lower_text.find(start_token)
+    if start_idx != -1:
+        start_idx += len(start_token)
+        end_idx = lower_text.find("```", start_idx)
+        if end_idx != -1:
+            contract_code = text[start_idx:end_idx].strip()
+    else:
+        generic_start = text.find("```")
+        if generic_start != -1:
+            generic_start += len("```")
+            generic_end = text.find("```", generic_start)
+            if generic_end != -1:
+                contract_code = text[generic_start:generic_end].strip()
+
+    clause_text = ""
+    for marker in ("clauses:", "key clauses:", "contract clauses:", "important clauses:"):
+        idx = lower_text.find(marker)
+        if idx != -1:
+            clause_text = text[idx + len(marker) :]
+            break
+
+    clauses: List[ContractClause] = []
+    if clause_text:
+        for line in clause_text.strip().splitlines():
+            clean = line.strip()
+            if not clean:
+                continue
+
+            clean = clean.lstrip("-*• ")
+            while clean and (clean[0].isdigit() or clean[0] in {".", ")", "("}):
+                clean = clean[1:].lstrip()
+
+            if not clean:
+                continue
+
+            if ":" in clean:
+                title, desc = clean.split(":", 1)
+            elif " - " in clean:
+                title, desc = clean.split(" - ", 1)
+            else:
+                title = f"Clause {len(clauses) + 1}"
+                desc = clean
+
+            clauses.append(
+                ContractClause(title=title.strip(), description=desc.strip())
+            )
+
+    if not clauses:
+        clauses = _default_clauses()
+
+    if not contract_code:
+        contract_code = text.strip()
+
+    return contract_code, clauses
+
+
+def _load_fsm_generation_stack():
+    global _fsm_model, _fsm_tokenizer, _fsm_device
+    with _fsm_lock:
+        if _fsm_model is not None and _fsm_tokenizer is not None and _fsm_device is not None:
+            return _fsm_model, _fsm_tokenizer, _fsm_device
+
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            from peft import PeftModel
+        except ImportError as exc:
+            raise RuntimeError(
+                "The FSM fine-tuned generator requires `torch`, `transformers`, and `peft`."
+            ) from exc
+
+        if not FSM_ADAPTER_PATH.exists():
+            raise FileNotFoundError(
+                f"FSM adapter checkpoint not found at {FSM_ADAPTER_PATH}. "
+                "Set FSM_PRETRAINED_PATH to the directory containing adapter_model.safetensors."
+            )
+
+        tokenizer = AutoTokenizer.from_pretrained(FSM_ADAPTER_PATH)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        dtype = torch.float16 if device.type == "cuda" else torch.float32
+
+        base_model = AutoModelForCausalLM.from_pretrained(
+            FSM_BASE_MODEL_ID,
+            torch_dtype=dtype,
+        )
+        model = PeftModel.from_pretrained(
+            base_model,
+            FSM_ADAPTER_PATH,
+        )
+        model.to(device)
+        model.eval()
+
+        _fsm_model = model
+        _fsm_tokenizer = tokenizer
+        _fsm_device = device
+        return _fsm_model, _fsm_tokenizer, _fsm_device
+
 class ContractClause(BaseModel):
     title: str
     description: str
@@ -41,26 +211,69 @@ class SmartContract(BaseModel):
 def generate_smart_contract(description: str, blockchain: str = "Ethereum") -> SmartContract:
     'This tool generates smart contracts for solidity based codes' # generate description
     # describe input too
-    prompt = f"""
-    You are an expert blockchain developer.
-    Generate a complete Solidity smart contract for the following description:
-    "{description}"
-
-    Requirements:
-    - Contract must be valid for {blockchain}.
-    - Include functions, modifiers, and comments.
-    - Provide only the Solidity code and a list of key clauses (title + description).
-    """
+    prompt = f"{SYSTEM_PROMPT}\n{_build_user_prompt(description, blockchain)}"
 
     llm = genai.GenerativeModel("gemini-2.0-flash")
     response = llm.generate_content(prompt)
 
-    # Return structured result
+    contract_code, clauses = _parse_contract_response(response.text)
     return SmartContract(
-        contract_code=response.text.strip(),
-        clauses=[
-            ContractClause(title="Example Clause", description="Core logic or rule implemented here.")
-        ],
+        contract_code=contract_code,
+        clauses=clauses,
+    )
+
+@mcp.tool()
+def generate_smart_contract_pretrained(
+    description: str, blockchain: str = "Ethereum", max_new_tokens: int = 800
+) -> SmartContract:
+    """
+    Generates a smart contract using the locally fine-tuned TinyLlama FSM checkpoint.
+    """
+    model, tokenizer, device = _load_fsm_generation_stack()
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": _build_user_prompt(description, blockchain)},
+    ]
+
+    if hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template:
+        chat_prompt = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+    else:
+        chat_prompt = f"{SYSTEM_PROMPT}\n\n{_build_user_prompt(description, blockchain)}"
+
+    import torch
+
+    inputs = tokenizer(
+        chat_prompt,
+        return_tensors="pt",
+        padding=True,
+    )
+    input_ids = inputs["input_ids"].to(device)
+    attention_mask = inputs.get("attention_mask")
+    if attention_mask is not None:
+        attention_mask = attention_mask.to(device)
+
+    with torch.no_grad():
+        output_ids = model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=max_new_tokens,
+            temperature=0.2,
+            top_p=0.95,
+            do_sample=True,
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+
+    generated_ids = output_ids[:, input_ids.shape[-1] :]
+    completion = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+    contract_code, clauses = _parse_contract_response(completion)
+
+    return SmartContract(
+        contract_code=contract_code,
+        clauses=clauses,
     )
 
 @mcp.tool()

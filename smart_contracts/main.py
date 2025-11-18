@@ -13,6 +13,13 @@ st.set_page_config(page_title="Smart Contract Generator", layout="wide")
 st.title("🧠 Solidity Smart Contract Generator")
 st.write("Describe your contract in natural language and generate Solidity code instantly.")
 
+MODEL_OPTIONS = {
+    "Gemini 2.0 Flash": "gemini",
+    "FSM Fine-Tuned TinyLlama": "fsm_pretrained",
+}
+model_label = st.selectbox("Choose generation model", list(MODEL_OPTIONS.keys()))
+selected_model = MODEL_OPTIONS[model_label]
+
 if "crew_log" not in st.session_state:
     st.session_state.crew_log = ""
 
@@ -52,7 +59,11 @@ if st.button("🚀 Generate Contract"):
     else:
         with st.spinner("Generating and validating your contract..."):
             pipeline = get_pipeline()
-            result, crew_log = pipeline(user_input, on_log=_handle_log_stream)
+            result, crew_log = pipeline(
+                user_input,
+                model_choice=selected_model,
+                on_log=_handle_log_stream,
+            )
         st.session_state.crew_log = crew_log
         _render_log_boxes(crew_log)
         st.success("✅ Contract generated successfully!")
