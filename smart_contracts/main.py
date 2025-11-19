@@ -77,7 +77,7 @@ with st.sidebar:
             st.session_state.chat_input = ""
             st.experimental_rerun()
 
-# --- Main Tabs ---
+# --- Main Tab ---
 st.title("🧠 Solidity Smart Contract Generator")
 st.markdown("Describe your contract in natural language and generate Solidity code instantly.")
 
