@@ -1,3 +1,4 @@
+agentics-python
 python-dotenv
 google-generativeai
 crewai
@@ -7,3 +8,4 @@ py-solc-x
 web3
 eth-tester
 py-evm
+streamlit-elements

@@ -28,10 +28,26 @@ class SmartContract(BaseModel):
 
 # check if pydantic input is needed
 
-@mcp.tool()
+@mcp.tool(name="generate_smart_contract")
 def generate_smart_contract(description: str, blockchain: str = "Ethereum") -> SmartContract:
-    'This tool generates smart contracts for solidity based codes' # generate description
-    # describe input too
+    """
+    Generate a Solidity smart contract from a natural-language description.
+
+    Parameters:
+        description: Text describing the contract’s purpose, rules, and behavior.
+        blockchain: Target EVM-compatible chain (e.g., Ethereum, Polygon). Default: Ethereum.
+
+    Output:
+        A SmartContract object containing:
+        - contract_code: The generated Solidity source code.
+        - clauses: Key clauses extracted from the description.
+        - is_compilable / is_deployable (initially False)
+        - compiler_errors / deploy_errors (initially None)
+
+    Notes:
+        The contract is generated using an LLM and may require compilation or testing.
+    """
+
     prompt = f"""
     You are an expert blockchain developer.
     Generate a complete Solidity smart contract for the following description:
@@ -54,11 +70,28 @@ def generate_smart_contract(description: str, blockchain: str = "Ethereum") -> S
         ],
     )
 
-@mcp.tool()
-def check_deployability(contract: SmartContract, openzeppelin_path: str = None) -> SmartContract:
+@mcp.tool(name="validate_smart_contract")
+def validate_smart_contract(contract: SmartContract, openzeppelin_path: str = None) -> SmartContract:
     """
-    Compiles and attempts to deploy a Solidity contract.
-    All compilation or deployment errors are c aptured in the SmartContract object.
+    Compile and attempt to deploy a Solidity smart contract.
+
+    Parameters:
+        contract: A SmartContract object containing Solidity source code.
+        openzeppelin_path: Optional local filesystem path to OpenZeppelin contracts
+                           for import resolution (e.g., @openzeppelin/...).
+
+    Process:
+        - Installs and sets Solidity compiler (solc 0.8.20).
+        - Compiles the contract, capturing compiler errors.
+        - Attempts deployment on an in-memory Ethereum test chain (EthereumTester).
+        - Auto-fills dummy values for constructor arguments.
+
+    Output:
+        The same SmartContract object, updated with:
+        - is_compilable: True if compilation succeeded.
+        - compiler_errors: Set if compilation failed.
+        - is_deployable: True if deployment succeeded.
+        - deploy_errors: Set if contract failed to deploy.
     """
     contract.is_compilable = False
     contract.is_deployable = False
@@ -127,7 +160,7 @@ def check_deployability(contract: SmartContract, openzeppelin_path: str = None) 
 
     return contract
 
-@mcp.tool()
+@mcp.tool(name="web_search")
 def web_search(query: str, max_results: int) -> list[str]:
     """return spippets of text extracted from duck duck go search for the given
         query :  using DDGS search operators

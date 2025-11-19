@@ -65,7 +65,7 @@ def run_contract_pipeline(user_input: str) -> SmartContract:
             expected_output="An updated SmartContract object with compilation/deployment status and error logs.",
             agent=contract_agent,
             output_pydantic=SmartContract,
-            tools=[check_deployability],
+            tools=[validate_smart_contract],
             inputs={"contract": "{memory.generated_contract}"}
         )
 
