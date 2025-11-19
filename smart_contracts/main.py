@@ -1,61 +1,99 @@
 # streamlit_app.py
+import re
+
 import streamlit as st
 
-@st.cache_resource
-def get_pipeline():
-    from agent import run_contract_pipeline
-    return run_contract_pipeline
+# --- Page Setup ---
+st.set_page_config(
+    page_title="Solidity Smart Contract Generator",
+    page_icon="🧠",
+    layout="wide"
+)
 
-st.set_page_config(page_title="Smart Contract Generator", layout="wide")
+# --- Custom CSS for professional look ---
+st.markdown("""
+<style>
+body {
+    background-color: #0e1117;
+    color: #fafafa;
+}
+.sidebar .sidebar-content {
+    background-color: #1a1d23;
+}
+button[kind="primary"] {
+    background-color: #4b8bf4 !important;
+    color: white !important;
+    border-radius: 8px !important;
+}
+.stTextInput > div > div > input {
+    border-radius: 6px;
+}
+</style>
+""", unsafe_allow_html=True)
 
+# --- Temporary Instructions Screen ---
+if "show_instructions" not in st.session_state:
+    st.session_state.show_instructions = True
+
+if st.session_state.show_instructions:
+    st.title("👋 Welcome to Solidity Smart Contract Generator")
+    st.markdown("""
+    **How to use:**
+    1. Choose a model from the dropdown.  
+    2. Enter your contract idea in natural language.  
+    3. Click **Generate Contract** to see the Solidity code.  
+    """)
+    if st.button("Got it!"):
+        st.session_state.show_instructions = False
+    st.stop()
+
+# --- Sidebar: Chat Assistant + Example Prompts ---
+with st.sidebar:
+    st.header("💬 Chat Assistant")
+    st.markdown("**Try asking:**")
+
+    example_prompts = [
+        "Create an ERC20 token with minting and burning",
+        "Write an NFT contract with royalties",
+        "Build a DAO voting contract",
+        "Add a time lock to a smart contract"
+    ]
+    for prompt in example_prompts:
+        if st.button(prompt):
+            st.session_state["chat_input"] = prompt
+
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    for msg in st.session_state.chat_history:
+        st.markdown(f"**You:** {msg['user']}")
+        st.markdown(f"**Bot:** {msg['bot']}")
+
+    user_input = st.text_input("Ask about smart contracts...", key="chat_input")
+    if st.button("Send"):
+        if user_input:
+            bot_reply = f"Placeholder reply for: '{user_input}'"
+            st.session_state.chat_history.append({"user": user_input, "bot": bot_reply})
+            st.session_state.chat_input = ""
+            st.experimental_rerun()
+
+# --- Main Tab ---
 st.title("🧠 Solidity Smart Contract Generator")
-st.write("Describe your contract in natural language and generate Solidity code instantly.")
+st.markdown("Describe your contract in natural language and generate Solidity code instantly.")
 
-# user_input = st.text_area(
-#     "Enter contract description:",
-#     placeholder=""""Create an ERC20 token named "MyToken" with symbol "MTK" and a total supply of 1,000,000 tokens (18 decimals). The contract should include standard ERC20 functions: transfer, approve, transferFrom, balanceOf, and totalSupply, as well as mint (only by owner) and burn (any holder) functions. Include events for Transfer and Approval, proper access control, and input validation following Solidity best practices.""",
-#     height=200
-# )
-user_input = """Create an ERC20 token named "MyToken" with symbol "MTK" and a total supply of 1,000,000 tokens (18 decimals). The contract should include standard ERC20 functions: transfer, approve, transferFrom, balanceOf, and totalSupply, as well as mint (only by owner) and burn (any holder) functions. Include events for Transfer and Approval, proper access control, and input validation following Solidity best practices."""
+tabs = st.tabs(["⚙️ Generator", "📜 CrewAI Logs", "💾 Deploy / Test"])
 
-if st.button("🚀 Generate Contract"):
-    if not user_input.strip():
-        st.warning("Please enter a contract description.")
-    else:
-        with st.spinner("Generating and validating your contract..."):
-            pipeline = get_pipeline()
-            result = pipeline(user_input)
-        st.success("✅ Contract generated successfully!")
+with tabs[0]:
+    st.subheader("Contract Generator")
+    model = st.selectbox("Choose generation model", ["Gemini 2.0 Flash", "GPT-4", "Claude 3.5"])
+    user_prompt = st.text_area("Describe your smart contract idea...")
+    if st.button("🚀 Generate Contract"):
+        st.code("// Solidity code will appear here", language="solidity")
 
-        # st.write(result)
-        contract = None
+with tabs[1]:
+    st.subheader("CrewAI Logs")
+    st.info("Crew logs will appear here once a run starts.")
 
-        if hasattr(result, "tasks_output") and result.tasks_output:
-            # Get last task output (usually validation)
-            last_task = result.tasks_output[-1]  # TaskOutput object
-            if hasattr(last_task, "pydantic") and last_task.pydantic:
-                contract = last_task.pydantic
-        elif hasattr(result, "pydantic") and result.pydantic:
-            contract = result.pydantic
-        elif hasattr(result, "raw") and result.raw:
-            contract = result.raw
-
-        # --- Display in Streamlit ---
-        if contract and hasattr(contract, "contract_code"):
-            st.subheader("📜 Solidity Code")
-            st.code(contract.contract_code, language="solidity")
-
-            st.subheader("🧪 Validation Results")
-            st.json({
-                "is_compilable": contract.is_compilable,
-                "is_deployable": contract.is_deployable,
-                "compiler_errors": contract.compiler_errors or "None",
-                "deploy_errors": contract.deploy_errors or "None"
-            })
-
-            if hasattr(contract, "clauses") and contract.clauses:
-                with st.expander("📖 Contract Clauses"):
-                    for clause in contract.clauses:
-                        st.markdown(f"**{clause.title}** — {clause.description}")
-        else:
-            st.error("❌ No valid SmartContract output found. Check your Crew pipeline or task names.")
+with tabs[2]:
+    st.subheader("Deploy / Test")
+    st.markdown("Future feature: simulate or deploy contracts directly.")

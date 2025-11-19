@@ -1,8 +1,18 @@
+import os
+import sys
+from pathlib import Path
+from threading import Lock
+from typing import List, Optional
+
+from pydantic import BaseModel, Field
+
 from mcp.server.fastmcp import FastMCP
 
-import os
-from pydantic import BaseModel, Field
-from typing import List, Optional
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_PATH = PROJECT_ROOT / "src"
+if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
+
 import google.generativeai as genai
 import solcx
 from web3 import Web3
@@ -13,6 +23,175 @@ from ddgs import DDGS
 mcp = FastMCP("Search")
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+DEFAULT_FSM_CHECKPOINT = "checkpoint-1200"
+FSM_ADAPTER_ROOT = (
+    PROJECT_ROOT
+    / "smart_contracts"
+    / "pretraining_code_checkpoints"
+    / "FSM-Fine-Tuning-Dataset"
+    / "artifacts"
+    / "fsm_pretraining"
+)
+FSM_ADAPTER_PATH = Path(
+    os.getenv(
+        "FSM_PRETRAINED_PATH",
+        FSM_ADAPTER_ROOT / os.getenv("FSM_PRETRAINED_CHECKPOINT", DEFAULT_FSM_CHECKPOINT),
+    )
+).expanduser()
+FSM_BASE_MODEL_ID = os.getenv(
+    "FSM_BASE_MODEL", "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+)
+
+_fsm_model = None
+_fsm_tokenizer = None
+_fsm_device = None
+_fsm_lock = Lock()
+
+SYSTEM_PROMPT = (
+    "You are an expert blockchain developer who writes production-grade Solidity "
+    "smart contracts with detailed documentation and validation checks."
+)
+
+
+def _build_user_prompt(description: str, blockchain: str) -> str:
+    return f"""
+Generate a complete Solidity smart contract for the following description:
+"{description}"
+
+Requirements:
+- Contract must target {blockchain}.
+- Include events, modifiers, and comments explaining the logic.
+- Validate inputs and follow best practices (access control, SafeMath when needed).
+- After the code, list key clauses as `Clauses:` with numbered bullet points
+  formatted as `Title: Description`.
+
+Respond using this structure:
+```solidity
+// Solidity contract
+```
+
+Clauses:
+1. Title: Description
+2. Title: Description
+"""
+
+
+def _default_clauses() -> List["ContractClause"]:
+    return [
+        ContractClause(
+            title="Core Requirements",
+            description="Generated contract implements the functionality described by the user.",
+        )
+    ]
+
+
+def _parse_contract_response(raw_text: str) -> tuple[str, List["ContractClause"]]:
+    text = raw_text or ""
+    lower_text = text.lower()
+
+    contract_code = text.strip()
+    start_token = "```solidity"
+    start_idx = lower_text.find(start_token)
+    if start_idx != -1:
+        start_idx += len(start_token)
+        end_idx = lower_text.find("```", start_idx)
+        if end_idx != -1:
+            contract_code = text[start_idx:end_idx].strip()
+    else:
+        generic_start = text.find("```")
+        if generic_start != -1:
+            generic_start += len("```")
+            generic_end = text.find("```", generic_start)
+            if generic_end != -1:
+                contract_code = text[generic_start:generic_end].strip()
+
+    clause_text = ""
+    for marker in ("clauses:", "key clauses:", "contract clauses:", "important clauses:"):
+        idx = lower_text.find(marker)
+        if idx != -1:
+            clause_text = text[idx + len(marker) :]
+            break
+
+    clauses: List[ContractClause] = []
+    if clause_text:
+        for line in clause_text.strip().splitlines():
+            clean = line.strip()
+            if not clean:
+                continue
+
+            clean = clean.lstrip("-*• ")
+            while clean and (clean[0].isdigit() or clean[0] in {".", ")", "("}):
+                clean = clean[1:].lstrip()
+
+            if not clean:
+                continue
+
+            if ":" in clean:
+                title, desc = clean.split(":", 1)
+            elif " - " in clean:
+                title, desc = clean.split(" - ", 1)
+            else:
+                title = f"Clause {len(clauses) + 1}"
+                desc = clean
+
+            clauses.append(
+                ContractClause(title=title.strip(), description=desc.strip())
+            )
+
+    if not clauses:
+        clauses = _default_clauses()
+
+    if not contract_code:
+        contract_code = text.strip()
+
+    return contract_code, clauses
+
+
+def _load_fsm_generation_stack():
+    global _fsm_model, _fsm_tokenizer, _fsm_device
+    with _fsm_lock:
+        if _fsm_model is not None and _fsm_tokenizer is not None and _fsm_device is not None:
+            return _fsm_model, _fsm_tokenizer, _fsm_device
+
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            from peft import PeftModel
+        except ImportError as exc:
+            raise RuntimeError(
+                "The FSM fine-tuned generator requires `torch`, `transformers`, and `peft`."
+            ) from exc
+
+        if not FSM_ADAPTER_PATH.exists():
+            raise FileNotFoundError(
+                f"FSM adapter checkpoint not found at {FSM_ADAPTER_PATH}. "
+                "Set FSM_PRETRAINED_PATH to the directory containing adapter_model.safetensors."
+            )
+
+        tokenizer = AutoTokenizer.from_pretrained(FSM_ADAPTER_PATH)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        dtype = torch.float16 if device.type == "cuda" else torch.float32
+
+        base_model = AutoModelForCausalLM.from_pretrained(
+            FSM_BASE_MODEL_ID,
+            torch_dtype=dtype,
+        )
+        model = PeftModel.from_pretrained(
+            base_model,
+            FSM_ADAPTER_PATH,
+        )
+        model.to(device)
+        model.eval()
+
+        _fsm_model = model
+        _fsm_tokenizer = tokenizer
+        _fsm_device = device
+        return _fsm_model, _fsm_tokenizer, _fsm_device
 
 class ContractClause(BaseModel):
     title: str
@@ -64,10 +243,8 @@ def generate_smart_contract(description: str, blockchain: str = "Ethereum") -> S
 
     # Return structured result
     return SmartContract(
-        contract_code=response.text.strip(),
-        clauses=[
-            ContractClause(title="Example Clause", description="Core logic or rule implemented here.")
-        ],
+        contract_code=contract_code,
+        clauses=clauses,
     )
 
 @mcp.tool(name="validate_smart_contract")
