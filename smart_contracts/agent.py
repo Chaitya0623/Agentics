@@ -164,9 +164,9 @@ def run_contract_pipeline(
                 f"Requested generation tool '{generation_tool_name}' is not available from the MCP server."
             )
 
-        check_tool = tool_registry.get("check_deployability")
+        check_tool = tool_registry.get("validate_smart_contract")
         if check_tool is None:
-            raise RuntimeError("check_deployability tool is not available.")
+            raise RuntimeError("validate_smart_contract tool is not available.")
 
         contract_agent = Agent(
             role="Blockchain Developer Agent",
