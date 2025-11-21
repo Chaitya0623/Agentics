@@ -61,6 +61,28 @@ if st.session_state.show_instructions:
     """)
     if st.button("Got it!"):
         st.session_state.show_instructions = False
+
+    # ---------------------------
+    # Credits block
+    # ---------------------------
+    st.markdown(
+        """
+    <div style="margin-top: 1.5rem; font-size: 0.9rem; color: #cccccc; line-height: 1.5;">
+
+    <strong>Project Team</strong><br/>
+    <a href="https://www.linkedin.com/in/chaityas/" target="_blank">Chaitya Shah</a><br/>
+    <a href="https://www.linkedin.com/in/chunghyun-han-355b80244/" target="_blank">Chunghyun Han</a><br/>
+    <a href="https://www.linkedin.com/in/nami-jain/" target="_blank">Nami Jain</a><br/>
+    <a href="https://www.linkedin.com/in/yegan-dhaivakumar" target="_blank">Yegan Dhaivakumar</a><br/><br/>
+
+    <strong>Faculty Advisors</strong><br/>
+    <a href="https://www.linkedin.com/in/gliozzo/" target="_blank">Alfio Massimiliano Gliozzo</a><br/>
+    <a href="https://www.linkedin.com/in/agostino-capponi-842b41a5/" target="_blank">Agostino Capponi</a>
+
+    </div>
+    """,
+        unsafe_allow_html=True
+    )
     st.stop()
 
 # ---------------------------
